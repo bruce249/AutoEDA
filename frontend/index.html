@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en" data-view="landing">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoEDA — Multi-Agent Data Analyst</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+
+  <!-- Our CSS & JS -->
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════ NOISE TEXTURE OVERLAY ═══════════════════════ -->
+  <div class="noise"></div>
+
+  <!-- ═══════════════════════ GRADIENT BLOBS ═════════════════════════════ -->
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+
+  <!-- ═══════════════════════ NAV ═════════════════════════════════════════ -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="7.5 4.21 12 6.81 16.5 4.21"/>
+            <line x1="12" y1="22.08" x2="12" y2="6.81"/>
+          </svg>
+        </span>
+        <span class="logo-text">Auto<span class="logo-accent">EDA</span></span>
+      </a>
+      <div class="nav-links">
+        <a href="#" id="nav-home" class="nav-link active" onclick="showLanding()">Home</a>
+        <a href="#" id="nav-dash" class="nav-link" onclick="showDashboard()">Dashboard</a>
+      </div>
+      <div class="nav-badge">Multi-Agent</div>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════ LANDING SECTION ════════════════════════════ -->
+  <section id="landing" class="landing">
+    <div class="hero">
+      <div class="hero-badge">Powered by AI Agents</div>
+      <h1 class="hero-title">
+        Analyse any dataset<br />
+        <span class="gradient-text">in seconds.</span>
+      </h1>
+      <p class="hero-sub">
+        Drop a CSV or Excel file. Our multi-agent system ingests, profiles,<br class="hide-mobile" />
+        and visualises your data — fully automated.
+      </p>
+
+      <!-- Upload area -->
+      <div class="upload-zone" id="upload-zone">
+        <div class="upload-zone-inner">
+          <div class="upload-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <p class="upload-text">Drag & drop your file here</p>
+          <p class="upload-hint">or <label for="file-input" class="upload-browse">browse</label> · CSV, Excel</p>
+          <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.tsv" hidden />
+        </div>
+      </div>
+
+      <!-- Features pills -->
+      <div class="features">
+        <div class="pill"><span class="pill-dot green"></span>Auto Schema Detection</div>
+        <div class="pill"><span class="pill-dot purple"></span>Distribution Analysis</div>
+        <div class="pill"><span class="pill-dot blue"></span>Correlation Mapping</div>
+        <div class="pill"><span class="pill-dot pink"></span>Smart Segmentation</div>
+      </div>
+    </div>
+
+    <!-- Agent cards -->
+    <div class="agents-row">
+      <div class="agent-card">
+        <div class="agent-num">01</div>
+        <h3>Ingestion Agent</h3>
+        <p>Loads, encodes, and standardises raw data into a clean DataFrame.</p>
+      </div>
+      <div class="agent-card">
+        <div class="agent-num">02</div>
+        <h3>EDA Agent</h3>
+        <p>Runs 6-step analysis: univariate, bivariate, distributions, segments, time-series, insights.</p>
+      </div>
+      <div class="agent-card">
+        <div class="agent-num">03</div>
+        <h3>Visualisation Engine</h3>
+        <p>Interactive Plotly charts generated automatically from analysis results.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ LOADING OVERLAY ════════════════════════════ -->
+  <section id="loading" class="loading-section hidden">
+    <div class="loader-card">
+      <div class="spinner"></div>
+      <h2 class="loader-title">Agents are analysing your data</h2>
+      <p class="loader-sub" id="loader-status">Running Ingestion Agent…</p>
+      <div class="loader-steps">
+        <div class="step active" id="step-ingest"><span class="step-dot"></span>Ingestion</div>
+        <div class="step-line"></div>
+        <div class="step" id="step-eda"><span class="step-dot"></span>EDA</div>
+        <div class="step-line"></div>
+        <div class="step" id="step-viz"><span class="step-dot"></span>Visualise</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ DASHBOARD ══════════════════════════════════ -->
+  <section id="dashboard" class="dashboard hidden">
+
+    <!-- top bar -->
+    <div class="dash-header">
+      <div>
+        <h2 class="dash-title" id="dash-title">Dataset Analysis</h2>
+        <p class="dash-sub" id="dash-sub"></p>
+      </div>
+      <button class="btn-outline" onclick="showLanding()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        New Analysis
+      </button>
+    </div>
+
+    <!-- KPI row -->
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <!-- Summary card -->
+    <div class="glass-card summary-card" id="summary-card">
+      <h3 class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        AI Summary
+      </h3>
+      <p id="summary-text"></p>
+    </div>
+
+    <!-- Insights -->
+    <div class="glass-card" id="insights-card" style="display:none">
+      <h3 class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+        Key Insights
+      </h3>
+      <div id="insights-list" class="insights-list"></div>
+    </div>
+
+    <!-- Preview table -->
+    <div class="glass-card" id="preview-card">
+      <h3 class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        Data Preview
+      </h3>
+      <div class="table-wrap" id="preview-table"></div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="section-header">
+      <h3>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Interactive Visualisations
+      </h3>
+      <div class="chart-filters" id="chart-filters"></div>
+    </div>
+    <div class="charts-grid" id="charts-grid"></div>
+
+    <!-- Segments -->
+    <div class="glass-card" id="segments-card" style="display:none">
+      <h3 class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+        Data Segments
+      </h3>
+      <div id="segments-list" class="segments-list"></div>
+    </div>
+
+  </section>
+
+  <!-- ═══════════════════════ FOOTER ═════════════════════════════════════ -->
+  <footer class="footer">
+    <p>AutoEDA © 2026 · Multi-Agent Data Analyst Platform</p>
+  </footer>
+
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
