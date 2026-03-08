@@ -9,6 +9,9 @@ import io
 import json
 import logging
 import os
+
+from dotenv import load_dotenv
+load_dotenv()  # reads .env into os.environ before anything else
 import sys
 import tempfile
 import traceback
@@ -26,8 +29,14 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents.ingestion import IngestionAgent
 from agents.eda import EDAAgent
+from agents.modeling import ModelingAgent
+from agents.chat import ChatAgent
+from agents.chat.chat_agent import build_chat_context
 
 logger = logging.getLogger(__name__)
+
+# ── In-memory session store (single-user; swap for Redis in prod) ────────
+_active_chat: dict = {}  # {"agent": ChatAgent | None}
 
 # ── FastAPI app ──────────────────────────────────────────────────────────
 app = FastAPI(title="AutoEDA — Multi-Agent Data Analyst")
@@ -296,6 +305,209 @@ def _build_chart_data(
     return _sanitise(charts)
 
 
+def _build_modeling_charts(modeling_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Build Plotly-compatible charts for the Modeling Agent results:
+    - Model comparison bar chart
+    - Feature importance horizontal bar
+    - Actual vs Predicted scatter / line
+    """
+    charts: List[Dict[str, Any]] = []
+    evaluation = modeling_result.get("evaluation", {})
+    problem = modeling_result.get("problem", {})
+    problem_type = problem.get("problem_type", "")
+
+    # ── 1. Model Comparison ──────────────────────────────────────────
+    comparison = modeling_result.get("model_comparison", [])
+    if comparison:
+        names = [c["name"] for c in comparison]
+        # Pick primary metric
+        if problem_type in ("regression", "time_series"):
+            metric_key = "R²"
+        elif problem_type == "classification":
+            metric_key = "F1"
+        else:
+            metric_key = "Silhouette"
+        values = [c["metrics"].get(metric_key, 0) for c in comparison]
+        best = evaluation.get("best_model", "")
+        colors = ["rgba(74,222,128,0.85)" if n == best else "rgba(99,102,241,0.65)" for n in names]
+
+        charts.append({
+            "id": "model_comparison",
+            "title": "Model Comparison",
+            "subtitle": f"Primary metric: {metric_key}",
+            "type": "model_bar",
+            "traces": [{
+                "x": names,
+                "y": values,
+                "type": "bar",
+                "marker": {"color": colors, "line": {"color": "rgba(255,255,255,0.1)", "width": 1}},
+                "text": [f"{v:.4f}" for v in values],
+                "textposition": "outside",
+                "textfont": {"color": "#94a3b8", "size": 12},
+            }],
+            "layout": {
+                "xaxis": {"title": "Model"},
+                "yaxis": {"title": metric_key},
+            },
+        })
+
+        # If regression, show additional metrics (RMSE, MAE) grouped
+        if problem_type in ("regression", "time_series") and len(comparison) > 1:
+            for extra_metric in ("RMSE", "MAE"):
+                extra_vals = [c["metrics"].get(extra_metric, 0) for c in comparison]
+                if any(v > 0 for v in extra_vals):
+                    charts.append({
+                        "id": f"model_{extra_metric.lower()}",
+                        "title": f"Model {extra_metric}",
+                        "subtitle": "Lower is better",
+                        "type": "model_bar",
+                        "traces": [{
+                            "x": names,
+                            "y": extra_vals,
+                            "type": "bar",
+                            "marker": {"color": [
+                                "rgba(34,211,238,0.85)" if n == best else "rgba(99,102,241,0.5)"
+                                for n in names
+                            ]},
+                            "text": [f"{v:.3f}" for v in extra_vals],
+                            "textposition": "outside",
+                            "textfont": {"color": "#94a3b8", "size": 12},
+                        }],
+                        "layout": {"xaxis": {"title": "Model"}, "yaxis": {"title": extra_metric}},
+                    })
+
+    # ── 2. Feature Importance ────────────────────────────────────────
+    importance = evaluation.get("feature_importance", {})
+    if importance:
+        feats = list(importance.keys())[:15]
+        scores = [importance[f] for f in feats]
+        # Reverse for horizontal bar (top at top)
+        feats = feats[::-1]
+        scores = scores[::-1]
+        charts.append({
+            "id": "feature_importance",
+            "title": "Feature Importance",
+            "subtitle": f"From {evaluation.get('best_model', 'best model')}",
+            "type": "feature_importance",
+            "traces": [{
+                "y": feats,
+                "x": scores,
+                "type": "bar",
+                "orientation": "h",
+                "marker": {
+                    "color": scores,
+                    "colorscale": [[0, "rgba(99,102,241,0.4)"], [1, "rgba(168,85,247,0.95)"]],
+                },
+            }],
+            "layout": {
+                "xaxis": {"title": "Relative Importance"},
+                "margin": {"l": 160},
+            },
+        })
+
+    # ── 3. Actual vs Predicted ───────────────────────────────────────
+    preview = modeling_result.get("predictions_preview", [])
+    if preview and "actual" in preview[0]:
+        actuals = [p["actual"] for p in preview if p["actual"] is not None]
+        preds = [p["predicted"] for p in preview if p["predicted"] is not None]
+
+        if problem_type in ("regression", "time_series"):
+            # Scatter plot: actual vs predicted
+            min_v = min(actuals + preds) if actuals else 0
+            max_v = max(actuals + preds) if actuals else 1
+            charts.append({
+                "id": "actual_vs_predicted",
+                "title": "Actual vs Predicted",
+                "subtitle": "Perfect predictions lie on the diagonal",
+                "type": "predictions",
+                "traces": [
+                    {
+                        "x": actuals,
+                        "y": preds,
+                        "mode": "markers",
+                        "type": "scatter",
+                        "name": "Predictions",
+                        "marker": {"color": "rgba(99,102,241,0.6)", "size": 6},
+                    },
+                    {
+                        "x": [min_v, max_v],
+                        "y": [min_v, max_v],
+                        "mode": "lines",
+                        "type": "scatter",
+                        "name": "Perfect",
+                        "line": {"color": "rgba(74,222,128,0.5)", "dash": "dash", "width": 2},
+                    },
+                ],
+                "layout": {
+                    "xaxis": {"title": "Actual"},
+                    "yaxis": {"title": "Predicted"},
+                },
+            })
+
+            # Residual plot
+            residuals = [p - a for a, p in zip(actuals, preds)]
+            charts.append({
+                "id": "residuals",
+                "title": "Residual Distribution",
+                "subtitle": "Should be centred around 0",
+                "type": "residuals",
+                "traces": [{
+                    "x": residuals,
+                    "type": "histogram",
+                    "marker": {"color": "rgba(168,85,247,0.6)", "line": {"color": "rgba(168,85,247,1)", "width": 1}},
+                    "nbinsx": 30,
+                }],
+                "layout": {
+                    "xaxis": {"title": "Residual (Predicted − Actual)"},
+                    "yaxis": {"title": "Count"},
+                },
+            })
+
+        elif problem_type == "time_series":
+            # Line chart: actual and predicted over index
+            idx = list(range(len(actuals)))
+            charts.append({
+                "id": "ts_predictions",
+                "title": "Time-Series Predictions",
+                "subtitle": "Test set: actual vs predicted",
+                "type": "predictions",
+                "traces": [
+                    {"x": idx, "y": actuals, "mode": "lines", "type": "scatter", "name": "Actual",
+                     "line": {"color": "rgba(99,102,241,0.8)", "width": 2}},
+                    {"x": idx, "y": preds, "mode": "lines", "type": "scatter", "name": "Predicted",
+                     "line": {"color": "rgba(74,222,128,0.8)", "width": 2, "dash": "dot"}},
+                ],
+                "layout": {"xaxis": {"title": "Index"}, "yaxis": {"title": problem.get("target", "Value")}},
+            })
+
+    # ── 4. Cluster scatter (2D PCA) for clustering ───────────────────
+    if problem_type == "clustering" and preview:
+        clusters = [p.get("cluster", 0) for p in preview]
+        color_map = [
+            "rgba(99,102,241,0.8)", "rgba(168,85,247,0.8)", "rgba(236,72,153,0.8)",
+            "rgba(34,211,238,0.8)", "rgba(74,222,128,0.8)", "rgba(250,204,21,0.8)",
+            "rgba(244,63,94,0.8)", "rgba(148,163,184,0.8)",
+        ]
+        colors = [color_map[c % len(color_map)] for c in clusters]
+        charts.append({
+            "id": "cluster_distribution",
+            "title": "Cluster Distribution",
+            "subtitle": f"{len(set(clusters))} clusters",
+            "type": "cluster",
+            "traces": [{
+                "x": list(range(len(clusters))),
+                "y": clusters,
+                "mode": "markers",
+                "type": "scatter",
+                "marker": {"color": colors, "size": 6},
+            }],
+            "layout": {"xaxis": {"title": "Sample Index"}, "yaxis": {"title": "Cluster"}},
+        })
+
+    return _sanitise(charts)
+
+
 # ── Routes ───────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -327,10 +539,15 @@ async def analyze(file: UploadFile = File(...)):
         eda = EDAAgent(verbose=False)
         eda_result = eda.run(ingestion_result)
 
+        # Agent 3 — Modeling & Insights
+        modeling = ModelingAgent(verbose=False)
+        modeling_result = modeling.run(ingestion_result, eda_result)
+
         df = ingestion_result["dataframe"]
 
         # Build chart data
         chart_data = _build_chart_data(df, eda_result, ingestion_result["schema"])
+        modeling_charts = _build_modeling_charts(modeling_result)
 
         # Build the preview table
         preview_records = ingestion_result["preview"].fillna("").to_dict(orient="records")
@@ -358,7 +575,22 @@ async def analyze(file: UploadFile = File(...)):
             "distributions": eda_result.get("distributions", {}),
             "visualization_recommendations": eda_result.get("visualization_recommendations", []),
             "charts": chart_data,
+            # ── Modeling Agent output ──
+            "modeling": {
+                "problem": modeling_result.get("problem", {}),
+                "feature_engineering": modeling_result.get("feature_engineering", {}),
+                "training": modeling_result.get("training", {}),
+                "evaluation": modeling_result.get("evaluation", {}),
+                "insights": modeling_result.get("insights", {}),
+                "predictions_preview": modeling_result.get("predictions_preview", []),
+                "model_comparison": modeling_result.get("model_comparison", []),
+            },
+            "modeling_charts": modeling_charts,
         }
+
+        # Build chat context and store a ChatAgent for this session
+        chat_ctx = build_chat_context(ingestion_result, eda_result, modeling_result)
+        _active_chat["agent"] = ChatAgent(chat_ctx)
 
         return _sanitise(payload)
 
@@ -370,6 +602,23 @@ async def analyze(file: UploadFile = File(...)):
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+from pydantic import BaseModel
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    """Answer a user question about the currently-loaded dataset."""
+    agent: ChatAgent | None = _active_chat.get("agent")
+    if agent is None:
+        raise HTTPException(400, "No dataset loaded yet. Upload a file first.")
+    answer = agent.ask(req.message)
+    return {"answer": answer}
 
 
 # ── Dev entry-point ──────────────────────────────────────────────────────
