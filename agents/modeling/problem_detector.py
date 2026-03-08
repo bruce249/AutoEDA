@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # ── Heuristic thresholds ────────────────────────────────────────────────
 _MAX_CLASS_CARDINALITY = 20  # above this, treat as regression not classification
 _MIN_ROWS_FOR_MODEL = 30
+_MAX_CLASS_UNIQUE_RATIO = 0.2
 
 
 def detect_problem(
@@ -87,18 +88,55 @@ def _from_target(
     """Classify problem based on a known target column."""
     features = [c for c in num_cols + cat_cols if c != target]
     time_col = dt_cols[0] if dt_cols else None
+    series = df[target].dropna()
 
-    if target in cat_cols or df[target].nunique() <= _MAX_CLASS_CARDINALITY:
-        n_classes = df[target].nunique()
+    if series.empty:
+        return _result(
+            "clustering", None, features, time_col,
+            f"Target '{target}' is empty after dropping missing values; defaulting to clustering.",
+        )
+
+    if _is_identifier_like(df, target):
+        return _result(
+            "clustering", None, features + [target], time_col,
+            f"Column '{target}' looks identifier-like (high uniqueness / key semantics); defaulting to clustering.",
+        )
+
+    nunique = int(series.nunique())
+    value_counts = series.value_counts(dropna=True)
+    min_class_size = int(value_counts.min()) if not value_counts.empty else 0
+    unique_ratio = nunique / max(len(series), 1)
+
+    # If the column is floating-point, treat as regression even if cardinality is low
+    is_float = pd.api.types.is_float_dtype(series)
+    is_integer = pd.api.types.is_integer_dtype(series) or _looks_integer_like(series)
+    is_bool = pd.api.types.is_bool_dtype(series)
+    is_categorical_like = target in cat_cols or is_bool or (
+        is_integer and nunique <= _MAX_CLASS_CARDINALITY and unique_ratio <= _MAX_CLASS_UNIQUE_RATIO
+    )
+
+    if is_categorical_like and min_class_size >= 2:
         return _result(
             "classification", target, features, time_col,
-            f"Target '{target}' has {n_classes} unique values → classification.",
+            f"Target '{target}' has {nunique} classes and minimum class size {min_class_size} → classification.",
         )
-    else:
+
+    if is_categorical_like and min_class_size < 2:
+        return _result(
+            "clustering", None, features + [target], time_col,
+            f"Target '{target}' has sparse classes (minimum class size {min_class_size}); supervised classification would be unstable, so defaulting to clustering.",
+        )
+
+    if target in num_cols or is_float or is_integer:
         return _result(
             "regression", target, features, time_col,
-            f"Target '{target}' is numeric with high cardinality → regression.",
+            f"Target '{target}' is numeric / continuous-like (unique ratio={unique_ratio:.2f}) → regression.",
         )
+
+    return _result(
+        "clustering", None, features + [target], time_col,
+        f"Target '{target}' does not fit a stable supervised setup; defaulting to clustering.",
+    )
 
 
 def _pick_ts_target(df: pd.DataFrame, num_cols: List[str]) -> Optional[str]:
@@ -129,9 +167,47 @@ def _guess_target(
         # Skip obvious IDs/keys
         if any(kw in lower for kw in ("_id", "id_", "index", "unnamed")):
             continue
+        if _is_identifier_like(df, col):
+            continue
         if col in num_cols or col in cat_cols:
             return col
     return None
+
+
+def _is_identifier_like(df: pd.DataFrame, col: str) -> bool:
+    """Heuristic: skip columns that behave like keys/IDs rather than targets."""
+    lower = col.lower()
+    if any(kw in lower for kw in ("id", "uuid", "guid", "key", "code", "token")):
+        return True
+
+    s = df[col].dropna()
+    if s.empty:
+        return False
+
+    unique_ratio = s.nunique() / max(len(s), 1)
+    if unique_ratio >= 0.95:
+        return True
+
+    if pd.api.types.is_numeric_dtype(s):
+        try:
+            monotonic = s.is_monotonic_increasing or s.is_monotonic_decreasing
+            if monotonic and unique_ratio >= 0.8:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def _looks_integer_like(series: pd.Series) -> bool:
+    """True when float values are effectively integer-coded classes."""
+    try:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if s.empty:
+            return False
+        return bool((s.round() == s).all())
+    except Exception:
+        return False
 
 
 def _result(problem_type: str, target, features, time_col, reason: str) -> Dict[str, Any]:

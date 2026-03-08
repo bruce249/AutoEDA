@@ -47,6 +47,18 @@ def evaluate_models(
         return _evaluate_classification(models, predictions, y_test, training_result)
 
 
+def _empty_result(reason: str) -> Dict[str, Any]:
+    """Return a safe fallback when no models could be evaluated."""
+    logger.warning(reason)
+    return {
+        "model_scores": {},
+        "best_model": "N/A",
+        "best_metrics": {},
+        "feature_importance": {},
+        "evaluation_summary": reason,
+    }
+
+
 # ── Regression / TS ──────────────────────────────────────────────────────
 
 def _evaluate_regression(models, predictions, y_test, training_result):
@@ -67,6 +79,8 @@ def _evaluate_regression(models, predictions, y_test, training_result):
             scores[name]["MAPE"] = round(mape, 2)
 
     # Best by R²
+    if not scores:
+        return _empty_result("No regression models trained successfully.")
     best = max(scores, key=lambda n: scores[n]["R²"])
     importance = _extract_importance(models[best], training_result["X_train"])
 
@@ -103,6 +117,8 @@ def _evaluate_classification(models, predictions, y_test, training_result):
             "F1": round(f1, 4),
         }
 
+    if not scores:
+        return _empty_result("No classification models trained successfully.")
     best = max(scores, key=lambda n: scores[n]["F1"])
     importance = _extract_importance(models[best], training_result["X_train"])
 

@@ -137,9 +137,26 @@ def _train_regression(sk, X, y, problem_type, test_size, random_state):
 # ── Classification ───────────────────────────────────────────────────────
 
 def _train_classification(sk, X, y, test_size, random_state):
-    X_train, X_test, y_train, y_test = sk["train_test_split"](
-        X, y, test_size=test_size, random_state=random_state, stratify=y,
-    )
+    y_non_null = y.dropna()
+    class_counts = y_non_null.value_counts()
+    min_class_size = int(class_counts.min()) if not class_counts.empty else 0
+    use_stratify = min_class_size >= 2 and y_non_null.nunique() > 1
+
+    if use_stratify:
+        X_train, X_test, y_train, y_test = sk["train_test_split"](
+            X, y, test_size=test_size, random_state=random_state, stratify=y,
+        )
+        split_method = "stratified_random"
+    else:
+        logger.warning(
+            "Classification target is too sparse for stratified split (classes=%d, min_class_size=%d); falling back to random split.",
+            int(y_non_null.nunique()),
+            min_class_size,
+        )
+        X_train, X_test, y_train, y_test = sk["train_test_split"](
+            X, y, test_size=test_size, random_state=random_state,
+        )
+        split_method = "random"
 
     n_classes = int(y.nunique())
     candidates = {
@@ -174,10 +191,12 @@ def _train_classification(sk, X, y, test_size, random_state):
         "y_train": y_train,
         "y_test": y_test,
         "split_info": {
-            "method": "stratified_random",
+            "method": split_method,
             "test_size": test_size,
             "train_rows": len(X_train),
             "test_rows": len(X_test),
+            "n_classes": int(y_non_null.nunique()),
+            "min_class_size": min_class_size,
         },
         "cluster_labels": None,
     }
